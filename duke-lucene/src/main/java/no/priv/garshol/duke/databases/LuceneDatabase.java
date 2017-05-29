@@ -1,13 +1,6 @@
 
 package no.priv.garshol.duke.databases;
 
-import java.io.File;
-import java.io.IOException;
-import java.io.StringReader;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.List;
-
 import no.priv.garshol.duke.Comparator;
 import no.priv.garshol.duke.Configuration;
 import no.priv.garshol.duke.Database;
@@ -17,7 +10,6 @@ import no.priv.garshol.duke.Property;
 import no.priv.garshol.duke.Record;
 import no.priv.garshol.duke.comparators.GeopositionComparator;
 import no.priv.garshol.duke.utils.Utils;
-
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.core.KeywordAnalyzer;
@@ -45,7 +37,13 @@ import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
 import org.apache.lucene.store.NIOFSDirectory;
 import org.apache.lucene.store.RAMDirectory;
-import org.apache.lucene.util.Version;
+
+import java.io.File;
+import java.io.IOException;
+import java.io.StringReader;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
 
 /**
  * Represents the Lucene index, and implements record linkage services
@@ -74,7 +72,7 @@ public class LuceneDatabase implements Database {
   private GeoProperty geoprop;
 
   public LuceneDatabase() {
-    this.analyzer = new StandardAnalyzer(Version.LUCENE_CURRENT);
+    this.analyzer = new StandardAnalyzer();
     this.maintracker = new EstimateResultTracker();
     this.max_search_hits = 1000000;
     this.fuzzy_search = true; // on by default
@@ -153,7 +151,7 @@ public class LuceneDatabase implements Database {
       Property prop = config.getPropertyByName(propname);
       if (prop == null)
         throw new DukeConfigException("Record has property " + propname +
-                                      " for which there is no configuration");
+            " for which there is no configuration");
 
       if (prop.getComparator() instanceof GeopositionComparator &&
           geoprop != null) {
@@ -169,7 +167,7 @@ public class LuceneDatabase implements Database {
 
         // this preserves the coordinates in readable form for display purposes
         doc.add(new Field(propname, v, Field.Store.YES,
-                          Field.Index.NOT_ANALYZED));
+            Field.Index.NOT_ANALYZED));
       } else {
         Field.Index ix;
         if (prop.isIdProperty())
@@ -262,8 +260,11 @@ public class LuceneDatabase implements Database {
     if (geoprop != null) {
       String value = record.getValue(geoprop.getName());
       if (value != null) {
-        Filter filter = geoprop.geoSearch(value);
-        return maintracker.doQuery(new MatchAllDocsQuery(), filter);
+        Query filter = geoprop.geoSearch(value);
+        BooleanQuery query = new BooleanQuery.Builder()
+            .add(filter, Occur.MUST)
+            .add(new MatchAllDocsQuery(), Occur.SHOULD).build();
+        return maintracker.doQuery(query);
       }
     }
 
@@ -276,8 +277,8 @@ public class LuceneDatabase implements Database {
         continue;
       for (String value : values)
         parseTokens(query, prop.getName(), value,
-                    prop.getLookupBehaviour() == Property.Lookup.REQUIRED,
-                    prop.getHighProbability());
+            prop.getLookupBehaviour() == Property.Lookup.REQUIRED,
+            prop.getHighProbability());
     }
 
     // do the query
@@ -303,8 +304,8 @@ public class LuceneDatabase implements Database {
 
   public String toString() {
     return "LuceneDatabase, max-search-hits: " + max_search_hits +
-      ", min-relevance: " + min_relevance + ", fuzzy: " + fuzzy_search +
-      ", boost-mode: " + boost_mode + ", path: " + path + "\n  " + directory;
+        ", min-relevance: " + min_relevance + ", fuzzy: " + fuzzy_search +
+        ", boost-mode: " + boost_mode + ", path: " + path + "\n  " + directory;
   }
 
   // ----- INTERNALS
@@ -332,15 +333,15 @@ public class LuceneDatabase implements Database {
           // as per http://wiki.apache.org/lucene-java/ImproveSearchingSpeed
           // we use NIOFSDirectory, provided we're not on Windows
           if (Utils.isWindowsOS())
-            directory = FSDirectory.open(new File(path));
+            directory = FSDirectory.open(new File(path).toPath());
           else
-            directory = NIOFSDirectory.open(new File(path));
+            directory = NIOFSDirectory.open(new File(path).toPath());
         }
 
         IndexWriterConfig cfg =
-          new IndexWriterConfig(Version.LUCENE_CURRENT, analyzer);
+            new IndexWriterConfig(analyzer);
         cfg.setOpenMode(overwrite ? IndexWriterConfig.OpenMode.CREATE :
-                                    IndexWriterConfig.OpenMode.APPEND);
+            IndexWriterConfig.OpenMode.APPEND);
         iwriter = new IndexWriter(directory, cfg);
         iwriter.commit(); // so that the searcher doesn't fail
       } catch (IndexNotFoundException e) {
@@ -364,7 +365,7 @@ public class LuceneDatabase implements Database {
    * to avoid thread-safety issues with Lucene's query parser.
    *
    * @param fieldName the name of the field
-   * @param value the value of the field
+   * @param value     the value of the field
    * @return the parsed query
    */
   private Query parseTokens(String fieldName, String value) {
@@ -374,10 +375,10 @@ public class LuceneDatabase implements Database {
 
       try {
         TokenStream tokenStream =
-          analyzer.tokenStream(fieldName, new StringReader(value));
+            analyzer.tokenStream(fieldName, new StringReader(value));
         tokenStream.reset();
         CharTermAttribute attr =
-          tokenStream.getAttribute(CharTermAttribute.class);
+            tokenStream.getAttribute(CharTermAttribute.class);
 
         while (tokenStream.incrementToken()) {
           String term = attr.toString();
@@ -386,7 +387,7 @@ public class LuceneDatabase implements Database {
         }
       } catch (IOException e) {
         throw new DukeException("Error parsing input string '" + value + "' " +
-                                "in field " + fieldName);
+            "in field " + fieldName);
       }
     }
 
@@ -395,20 +396,21 @@ public class LuceneDatabase implements Database {
 
   /**
    * Parses Lucene query.
+   *
    * @param required Iff true, return only records matching this value.
    */
   private void parseTokens(BooleanQuery parent, String fieldName,
-                             String value, boolean required, double probability) {
+                           String value, boolean required, double probability) {
     value = escapeLucene(value);
     if (value.length() == 0)
       return;
-
+    TokenStream tokenStream = null;
     try {
-      TokenStream tokenStream =
-        analyzer.tokenStream(fieldName, new StringReader(value));
+      tokenStream =
+          analyzer.tokenStream(fieldName, new StringReader(value));
       tokenStream.reset();
       CharTermAttribute attr =
-        tokenStream.getAttribute(CharTermAttribute.class);
+          tokenStream.getAttribute(CharTermAttribute.class);
 
       Float boost = getBoostFactor(probability, BoostMode.QUERY);
 
@@ -425,8 +427,16 @@ public class LuceneDatabase implements Database {
         parent.add(termQuery, required ? Occur.MUST : Occur.SHOULD);
       }
     } catch (IOException e) {
-      throw new DukeException("Error parsing input string '"+value+"' "+
-                              "in field " + fieldName);
+      throw new DukeException("Error parsing input string '" + value + "' " +
+          "in field " + fieldName);
+    } finally {
+      if (tokenStream != null) {
+        try {
+          tokenStream.close();
+        } catch (IOException e) {
+          e.printStackTrace();
+        }
+      }
     }
   }
 
@@ -462,7 +472,7 @@ public class LuceneDatabase implements Database {
    * influence on search performance, but setting it too low causes
    * matches to be missed. We therefore try hard to estimate it as
    * correctly as possible.
-   *
+   * <p>
    * The tracker uses a ring buffer of recent result sizes to
    * estimate the result size.
    */
@@ -499,13 +509,13 @@ public class LuceneDatabase implements Database {
 
         matches = new ArrayList(Math.min(hits.length, max_search_hits));
         for (int ix = 0; ix < hits.length &&
-                         hits[ix].score >= min_relevance; ix++)
+            hits[ix].score >= min_relevance; ix++)
 
           matches.add(new DocumentRecord(hits[ix].doc,
-                                         searcher.doc(hits[ix].doc)));
+              searcher.doc(hits[ix].doc)));
 
         if (hits.length > 0) {
-          synchronized(this) {
+          synchronized (this) {
             prevsizes[sizeix++] = matches.size();
             if (sizeix == prevsizes.length) {
               sizeix = 0;
